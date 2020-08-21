@@ -43,6 +43,29 @@ struct sof_ipc_dma_trace_posn {
 	uint32_t messages;	/* total trace messages */
 }  __packed;
 
+/* Values used in sof_ipc_trace_filter_elem  */
+#define SOF_IPC_TRACE_FILTER_ELEM_LEVEL	0x01	/**< new trace level for selected components */
+#define SOF_IPC_TRACE_FILTER_ELEM_UUID	0x02	/**< filter by uuid */
+#define SOF_IPC_TRACE_FILTER_ELEM_COMP	0x03	/**< filter by component id */
+#define SOF_IPC_TRACE_FILTER_ELEM_PIPE	0x04	/**< filter by pipeline */
+#define SOF_IPC_TRACE_FILTER_ELEM_MASK	0x7F	/**< filter element type mask */
+#define SOF_IPC_TRACE_FILTER_ELEM_FIN	0x80	/**< mark last filter in set */
+
+/** part of sof_ipc_trace_filter */
+struct sof_ipc_trace_filter_elem {
+	int32_t key;		/**< SOF_IPC_TRACE_FILTER_ELEM_ {LEVEL, UUID, COMP, PIPE} */
+	int32_t value;		/**< element value */
+} __packed;
+
+/** Runtime tracing filtration data - SOF_IPC_TRACE_FILTER_UPDATE */
+struct sof_ipc_trace_filter {
+	struct sof_ipc_cmd_hdr hdr;	/**< IPC command header */
+	uint32_t elem_cnt;		/**< number of entries in elems[] array */
+	uint32_t reserved[8];		/**< reserved for future usage */
+	/** variable size array with new filtering settings */
+	struct sof_ipc_trace_filter_elem elems[];
+} __packed;
+
 /*
  * Commom debug
  */

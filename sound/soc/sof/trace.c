@@ -13,11 +13,162 @@
 #include "sof-priv.h"
 #include "ops.h"
 
+#define TRACE_FILTER_MAX_IPC_ELEMENTS_PER_ENTRY 4
+
+static int trace_filter_append_elem(int32_t key, int32_t value,
+				    struct sof_ipc_trace_filter_elem *elem_list,
+				    size_t capacity, size_t *counter)
+{
+	if (*counter >= capacity)
+		return -ENOMEM;
+
+	elem_list[*counter].key = key;
+	elem_list[*counter].value = value;
+	++*counter;
+
+	return 0;
+}
+
+static int trace_filter_parse_entry(struct snd_sof_dev *sdev, const char *line,
+				    struct sof_ipc_trace_filter_elem *elem,
+				    size_t capacity, size_t *counter)
+{
+	int len = strlen(line);
+	size_t cnt = *counter;
+	int log_level;
+	int uuid_id;
+	int pipe_id;
+	int comp_id;
+	int read;
+	int ret;
+
+	ret = sscanf(line, " %d %x %d %d %n", &log_level, &uuid_id, &pipe_id, &comp_id, &read);
+	if (ret != 4 || read != len) {
+		dev_err(sdev->dev, "error: invalid trace filter entry '%s'\n",
+			line);
+		return -EINVAL;
+	}
+
+	if (uuid_id > 0) {
+		ret = trace_filter_append_elem(SOF_IPC_TRACE_FILTER_ELEM_UUID,
+					       uuid_id, elem, capacity, &cnt);
+		if (ret)
+			return ret;
+	}
+	if (pipe_id >= 0) {
+		ret = trace_filter_append_elem(SOF_IPC_TRACE_FILTER_ELEM_PIPE,
+					       pipe_id, elem, capacity, &cnt);
+		if (ret)
+			return ret;
+	}
+	if (comp_id >= 0) {
+		ret = trace_filter_append_elem(SOF_IPC_TRACE_FILTER_ELEM_COMP,
+					       comp_id, elem, capacity, &cnt);
+		if (ret)
+			return ret;
+	}
+
+	ret = trace_filter_append_elem(SOF_IPC_TRACE_FILTER_ELEM_LEVEL |
+				       SOF_IPC_TRACE_FILTER_ELEM_FIN,
+				       log_level, elem, capacity, &cnt);
+	if (ret)
+		return ret;
+
+	/* update counter only when parsing whole entry passed */
+	*counter = cnt;
+
+	return len;
+}
+
+static int trace_filter_parse(struct snd_sof_dev *sdev, char* string,
+			      size_t len, size_t *out_elem_cnt,
+			      struct sof_ipc_trace_filter_elem **out)
+{
+	const char entry_delimiter = ';';
+	char *entry = string;
+	size_t capacity = 0;
+	char *entry_end;
+	size_t cnt = 0;
+	int entry_len;
+
+	/* calculate capacity for the worst case scenario */
+	while (entry) {
+		capacity += TRACE_FILTER_MAX_IPC_ELEMENTS_PER_ENTRY;
+		entry = strchr(entry + 1, entry_delimiter);
+	}
+	*out = kmalloc(capacity * sizeof(**out), GFP_KERNEL);
+	if (!*out)
+		return -ENOMEM;
+
+	/* split input string by ';', and parse each entry separately in trace_filter_parse_entry */
+	entry = string;
+	while (entry < string + len) {
+		entry_end = strchrnul(entry, entry_delimiter);
+		*entry_end = '\0';
+
+		if (!strcmp(entry, "\n")) {
+			entry = entry_end + 1;
+			continue;
+		}
+
+		entry_len = trace_filter_parse_entry(sdev, entry, *out, capacity, &cnt);
+		if (entry_len <= 0) {
+			dev_err(sdev->dev, "error: trace_filter_parse_entry for '%s' failed, '%d'\n",
+				entry, entry_len);
+			return -EINVAL;
+		}
+		entry = entry_end + 1;
+	}
+
+	*out_elem_cnt = cnt;
+
+	return 0;
+}
+
+static int sof_ipc_trace_update_filter(struct snd_sof_dev *sdev, size_t num_elems,
+				       struct sof_ipc_trace_filter_elem *elems)
+{
+	struct sof_ipc_trace_filter *msg;
+	struct sof_ipc_reply reply;
+	size_t size;
+	int ret;
+
+	size = struct_size(msg, elems, num_elems);
+	if (size > SOF_IPC_MSG_MAX_SIZE)
+		return -ENOMEM;
+
+	msg = kmalloc(size, GFP_KERNEL);
+	if (!msg)
+		return -ENOMEM;
+
+	msg->hdr.size = size;
+	msg->hdr.cmd = SOF_IPC_GLB_TRACE_MSG | SOF_IPC_TRACE_FILTER_UPDATE;
+	msg->elem_cnt = num_elems;
+	memcpy(&msg->elems[0], elems, num_elems * sizeof(*elems));
+
+	ret = pm_runtime_get_sync(sdev->dev);
+	if (ret < 0) {
+		pm_runtime_put_noidle(sdev->dev);
+		dev_err(sdev->dev, "Enabling device failed: %d\n", ret);
+		goto error;
+	}
+	ret = sof_ipc_tx_message(sdev->ipc, msg->hdr.cmd, msg, msg->hdr.size,
+				 &reply, sizeof(reply));
+	pm_runtime_mark_last_busy(sdev->dev);
+	pm_runtime_put_autosuspend(sdev->dev);
+
+error:
+	kfree(msg);
+	return ret ? ret : reply.error;
+}
+
 static ssize_t sof_dfsentry_trace_filter_write(struct file *file,
 		const char __user *from, size_t count, loff_t *ppos)
 {
 	struct snd_sof_dfsentry *dfse = file->private_data;
+	struct sof_ipc_trace_filter_elem *elems = NULL;
 	struct snd_sof_dev *sdev = dfse->sdev;
+	size_t num_elems;
 	loff_t pos = 0;
 	char *string;
 	int ret;
@@ -28,8 +179,22 @@ static ssize_t sof_dfsentry_trace_filter_write(struct file *file,
 		return -ENOMEM;
 
 	ret = simple_write_to_buffer(string, count, &pos, from, count);
+	if (ret < 0)
+		goto error;
 
+	ret = trace_filter_parse(sdev, string, count, &num_elems, &elems);
+	if (ret < 0) {
+		dev_err(sdev->dev, "error: fail in trace_filter_parse, %d\n", ret);
+		goto error;
+	}
+
+	ret = sof_ipc_trace_update_filter(sdev, num_elems, elems);
+	if (ret < 0)
+		dev_err(sdev->dev, "error: fail in sof_ipc_trace_update_filter %d\n", ret);
+
+error:
 	kfree(string);
+	kfree(elems);
 	return ret;
 }
 
