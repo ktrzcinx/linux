@@ -13,6 +13,51 @@
 #include "sof-priv.h"
 #include "ops.h"
 
+static ssize_t sof_dfsentry_trace_filter_write(struct file *file,
+		const char __user *from, size_t count, loff_t *ppos)
+{
+	struct snd_sof_dfsentry *dfse = file->private_data;
+	struct snd_sof_dev *sdev = dfse->sdev;
+	loff_t pos = 0;
+	char *string;
+	int ret;
+
+	/* assert null termination */
+	string = kzalloc(count + 1, GFP_KERNEL);
+	if (!string)
+		return -ENOMEM;
+
+	ret = simple_write_to_buffer(string, count, &pos, from, count);
+
+	kfree(string);
+	return ret;
+}
+
+static const struct file_operations sof_dfs_trace_filter_fops = {
+	.open = simple_open,
+	.write = sof_dfsentry_trace_filter_write,
+	.llseek = default_llseek,
+};
+
+static int trace_debugfs_filter_create(struct snd_sof_dev *sdev)
+{
+	struct snd_sof_dfsentry *dfse;
+
+	dfse = devm_kzalloc(sdev->dev, sizeof(*dfse), GFP_KERNEL);
+	if (!dfse)
+		return -ENOMEM;
+
+	dfse->sdev = sdev;
+	dfse->type = SOF_DFSENTRY_TYPE_BUF;
+
+	debugfs_create_file("filter", 0200, sdev->debugfs_root, dfse,
+			    &sof_dfs_trace_filter_fops);
+	/* add to dfsentry list */
+	list_add(&dfse->list, &sdev->dfsentry_list);
+
+	return 0;
+}
+
 static size_t sof_trace_avail(struct snd_sof_dev *sdev,
 			      loff_t pos, size_t buffer_size)
 {
@@ -135,9 +180,14 @@ static const struct file_operations sof_dfs_trace_fops = {
 static int trace_debugfs_create(struct snd_sof_dev *sdev)
 {
 	struct snd_sof_dfsentry *dfse;
+	int ret;
 
 	if (!sdev)
 		return -EINVAL;
+
+	ret = trace_debugfs_filter_create(sdev);
+	if (ret < 0)
+		return ret;
 
 	dfse = devm_kzalloc(sdev->dev, sizeof(*dfse), GFP_KERNEL);
 	if (!dfse)
