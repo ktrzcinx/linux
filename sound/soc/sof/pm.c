@@ -272,6 +272,7 @@ int snd_sof_dsp_power_down_notify(struct snd_sof_dev *sdev)
 
 int snd_sof_runtime_suspend(struct device *dev)
 {
+	dev_info(dev, "error: snd_sof_runtime_suspend\n");
 	return sof_suspend(dev, true);
 }
 EXPORT_SYMBOL(snd_sof_runtime_suspend);
@@ -280,24 +281,28 @@ int snd_sof_runtime_idle(struct device *dev)
 {
 	struct snd_sof_dev *sdev = dev_get_drvdata(dev);
 
+	dev_info(dev, "error: snd_sof_runtime_idle\n");
 	return snd_sof_dsp_runtime_idle(sdev);
 }
 EXPORT_SYMBOL(snd_sof_runtime_idle);
 
 int snd_sof_runtime_resume(struct device *dev)
 {
+	dev_info(dev, "error: snd_sof_runtime_resume\n");
 	return sof_resume(dev, true);
 }
 EXPORT_SYMBOL(snd_sof_runtime_resume);
 
 int snd_sof_resume(struct device *dev)
 {
+	dev_info(dev, "error: snd_sof_resume\n");
 	return sof_resume(dev, false);
 }
 EXPORT_SYMBOL(snd_sof_resume);
 
 int snd_sof_suspend(struct device *dev)
 {
+	dev_info(dev, "error: snd_sof_suspend\n");
 	return sof_suspend(dev, false);
 }
 EXPORT_SYMBOL(snd_sof_suspend);
@@ -305,6 +310,8 @@ EXPORT_SYMBOL(snd_sof_suspend);
 int snd_sof_prepare(struct device *dev)
 {
 	struct snd_sof_dev *sdev = dev_get_drvdata(dev);
+
+	dev_info(dev, "error: snd_sof_prepare\n");
 
 #if defined(CONFIG_ACPI)
 	if (acpi_target_system_state() == ACPI_STATE_S0)
@@ -323,6 +330,8 @@ EXPORT_SYMBOL(snd_sof_prepare);
 void snd_sof_complete(struct device *dev)
 {
 	struct snd_sof_dev *sdev = dev_get_drvdata(dev);
+
+	dev_info(dev, "error: snd_sof_complete\n");
 
 	sdev->system_suspend_target = SOF_SUSPEND_NONE;
 }

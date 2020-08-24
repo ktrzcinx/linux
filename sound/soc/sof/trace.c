@@ -15,10 +15,12 @@
 
 #define TRACE_FILTER_MAX_IPC_ELEMENTS_PER_ENTRY 4
 
-static int trace_filter_append_elem(int32_t key, int32_t value,
+static int trace_filter_append_elem(struct snd_sof_dev *sdev, int32_t key, int32_t value,
 				    struct sof_ipc_trace_filter_elem *elem_list,
 				    size_t capacity, size_t *counter)
 {
+	dev_info(sdev->dev, "trace_filter_append_elem key 0x%x value 0x%x %d/%d\n", key, value, *counter, capacity);
+
 	if (*counter >= capacity)
 		return -ENOMEM;
 
@@ -50,25 +52,25 @@ static int trace_filter_parse_entry(struct snd_sof_dev *sdev, const char *line,
 	}
 
 	if (uuid_id > 0) {
-		ret = trace_filter_append_elem(SOF_IPC_TRACE_FILTER_ELEM_UUID,
+		ret = trace_filter_append_elem(sdev, SOF_IPC_TRACE_FILTER_ELEM_UUID,
 					       uuid_id, elem, capacity, &cnt);
 		if (ret)
 			return ret;
 	}
 	if (pipe_id >= 0) {
-		ret = trace_filter_append_elem(SOF_IPC_TRACE_FILTER_ELEM_PIPE,
+		ret = trace_filter_append_elem(sdev, SOF_IPC_TRACE_FILTER_ELEM_PIPE,
 					       pipe_id, elem, capacity, &cnt);
 		if (ret)
 			return ret;
 	}
 	if (comp_id >= 0) {
-		ret = trace_filter_append_elem(SOF_IPC_TRACE_FILTER_ELEM_COMP,
+		ret = trace_filter_append_elem(sdev, SOF_IPC_TRACE_FILTER_ELEM_COMP,
 					       comp_id, elem, capacity, &cnt);
 		if (ret)
 			return ret;
 	}
 
-	ret = trace_filter_append_elem(SOF_IPC_TRACE_FILTER_ELEM_LEVEL |
+	ret = trace_filter_append_elem(sdev, SOF_IPC_TRACE_FILTER_ELEM_LEVEL |
 				       SOF_IPC_TRACE_FILTER_ELEM_FIN,
 				       log_level, elem, capacity, &cnt);
 	if (ret)
@@ -93,9 +95,11 @@ static int trace_filter_parse(struct snd_sof_dev *sdev, char* string,
 
 	/* calculate capacity for the worst case scenario */
 	while (entry) {
+		dev_info(sdev->dev, "\ttrace_filter_parse cap %d entry '%s' \n", capacity, entry);
 		capacity += TRACE_FILTER_MAX_IPC_ELEMENTS_PER_ENTRY;
 		entry = strchr(entry + 1, entry_delimiter);
 	}
+	dev_info(sdev->dev, "trace_filter_parse allocate buffer for %d elems (str len %d)\n", capacity, len);
 	*out = kmalloc(capacity * sizeof(**out), GFP_KERNEL);
 	if (!*out)
 		return -ENOMEM;
@@ -111,6 +115,7 @@ static int trace_filter_parse(struct snd_sof_dev *sdev, char* string,
 			continue;
 		}
 
+		dev_info(sdev->dev, "trace_filter_parse_entry '%s'\n", entry);
 		entry_len = trace_filter_parse_entry(sdev, entry, *out, capacity, &cnt);
 		if (entry_len <= 0) {
 			dev_err(sdev->dev, "error: trace_filter_parse_entry for '%s' failed, '%d'\n",
@@ -146,6 +151,11 @@ static int sof_ipc_trace_update_filter(struct snd_sof_dev *sdev, size_t num_elem
 	msg->elem_cnt = num_elems;
 	memcpy(&msg->elems[0], elems, num_elems * sizeof(*elems));
 
+	dev_info(sdev->dev, "sof_ipc_trace_update_filter size %d = %d + %d * %d\n",
+		size, sizeof(*msg), sizeof(*elems), num_elems);
+	for (ret = 0; ret < num_elems; ++ret)
+		dev_info(sdev->dev, "\telem%d 0x%x 0x%x -> 0x%x\n", ret, &elems[ret], msg->elems[ret].key, msg->elems[ret].value);
+
 	ret = pm_runtime_get_sync(sdev->dev);
 	if (ret < 0) {
 		pm_runtime_put_noidle(sdev->dev);
@@ -173,21 +183,26 @@ static ssize_t sof_dfsentry_trace_filter_write(struct file *file,
 	char *string;
 	int ret;
 
+	dev_info(sdev->dev, "sof_dfsentry_trace_filter_write start\n");
+
 	/* assert null termination */
 	string = kzalloc(count + 1, GFP_KERNEL);
 	if (!string)
 		return -ENOMEM;
 
+	dev_info(sdev->dev, "sof_dfsentry_trace_filter_write count %d\n", count);
 	ret = simple_write_to_buffer(string, count, &pos, from, count);
 	if (ret < 0)
 		goto error;
 
+	dev_info(sdev->dev, "\tstring '%s'\n", string);
 	ret = trace_filter_parse(sdev, string, count, &num_elems, &elems);
 	if (ret < 0) {
 		dev_err(sdev->dev, "error: fail in trace_filter_parse, %d\n", ret);
 		goto error;
 	}
 
+	dev_info(sdev->dev, "sof_dfsentry_trace_filter_write\n");
 	ret = sof_ipc_trace_update_filter(sdev, num_elems, elems);
 	if (ret < 0)
 		dev_err(sdev->dev, "error: fail in sof_ipc_trace_update_filter %d\n", ret);
@@ -195,6 +210,7 @@ static ssize_t sof_dfsentry_trace_filter_write(struct file *file,
 error:
 	kfree(string);
 	kfree(elems);
+	dev_info(sdev->dev, "sof_dfsentry_trace_filter_write end\n");
 	return ret;
 }
 
