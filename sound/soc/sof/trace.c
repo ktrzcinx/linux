@@ -16,17 +16,20 @@
 #define TRACE_FILTER_ELEMENT_EXPANSION 10
 #define TRACE_FILTER_CHARS_PER_ELEMENT_ESTIMATION 4
 
-static int trace_filter_append_elem(int32_t key, int32_t value,
+static int trace_filter_append_elem(struct snd_sof_dev *sdev, int32_t key, int32_t value,
 				    struct sof_ipc_trace_filter_elem **elem_list,
 				    size_t *capacity, size_t *counter)
 {
 	struct sof_ipc_trace_filter_elem *elem_ptr;
 	size_t new_capacity;
 
+	dev_info(sdev->dev, "trace_filter_append_elem key 0x%x value 0x%x %d/%d\n", key, value, *counter, *capacity);
+
 	/* assert enough space, allocate space for a few more elements to reduce realloc() calls */
 	if (*counter >= *capacity) {
 		new_capacity = *capacity + TRACE_FILTER_ELEMENT_EXPANSION;
 		elem_ptr = krealloc(*elem_list, new_capacity * sizeof(*elem_ptr), GFP_KERNEL);
+		dev_info(sdev->dev, "\t realloc to 0x%X\n", (uintptr_t)elem_ptr);
 		if (!elem_ptr)
 			return -ENOMEM;
 		*elem_list = elem_ptr;
@@ -37,6 +40,8 @@ static int trace_filter_append_elem(int32_t key, int32_t value,
 	elem_ptr->key = key;
 	elem_ptr->value = value;
 	*counter += 1;
+	
+	dev_info(sdev->dev, "\t0x%X key 0x%x value 0x%x %d/%d\n", (uintptr_t)elem_ptr, elem_ptr->key, elem_ptr->value, *counter, *capacity);
 
 	return 0;
 }
@@ -62,25 +67,25 @@ static int trace_filter_parse_entry(struct snd_sof_dev *sdev, const char *line,
 	}
 
 	if (uuid_id > 0) {
-		ret = trace_filter_append_elem(SOF_IPC_TRACE_FILTER_ELEM_UUID,
+		ret = trace_filter_append_elem(sdev, SOF_IPC_TRACE_FILTER_ELEM_UUID,
 					       uuid_id, elem, capacity, &cnt);
 		if (ret)
 			return ret;
 	}
 	if (pipe_id >= 0) {
-		ret = trace_filter_append_elem(SOF_IPC_TRACE_FILTER_ELEM_PIPE,
+		ret = trace_filter_append_elem(sdev, SOF_IPC_TRACE_FILTER_ELEM_PIPE,
 					       pipe_id, elem, capacity, &cnt);
 		if (ret)
 			return ret;
 	}
 	if (comp_id >= 0) {
-		ret = trace_filter_append_elem(SOF_IPC_TRACE_FILTER_ELEM_PIPE,
+		ret = trace_filter_append_elem(sdev, SOF_IPC_TRACE_FILTER_ELEM_COMP,
 					       comp_id, elem, capacity, &cnt);
 		if (ret)
 			return ret;
 	}
 
-	ret = trace_filter_append_elem(SOF_IPC_TRACE_FILTER_ELEM_LEVEL |
+	ret = trace_filter_append_elem(sdev, SOF_IPC_TRACE_FILTER_ELEM_LEVEL |
 				       SOF_IPC_TRACE_FILTER_ELEM_FIN,
 				       log_level, elem, capacity, &cnt);
 	if (ret)
@@ -165,6 +170,11 @@ static int sof_ipc_trace_update_filter(struct snd_sof_dev *sdev, size_t num_elem
 	msg->hdr.cmd = SOF_IPC_GLB_TRACE_MSG | SOF_IPC_TRACE_FILTER_UPDATE;
 	msg->elem_cnt = num_elems;
 	memcpy(&msg->elems[0], elems, num_elems * sizeof(*elems));
+
+	dev_info(sdev->dev, "sof_ipc_trace_update_filter size %d = %d + %d * %d\n",
+		size, sizeof(*msg), sizeof(*elems), num_elems);
+	for (ret = 0; ret < num_elems; ++ret)
+		dev_info(sdev->dev, "\telem%d 0x%x 0x%x -> 0x%x\n", ret, &elems[ret], msg->elems[ret].key, msg->elems[ret].value);
 
 	ret = pm_runtime_get_sync(sdev->dev);
 	if (ret < 0) {
